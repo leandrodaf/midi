@@ -20,7 +20,7 @@ func applyDefaultOptions(opts ...contracts.Option) (contracts.ClientOptions, err
 
 	// Set defaults if options are not provided
 	if options.Logger == nil {
-		options.Logger = logger.NewStandardLogger() // Default to a standard logger
+		options.Logger = logger.NewZapLogger() // Default to a standard logger
 	}
 	if options.LogLevel == 0 {
 		options.LogLevel = contracts.InfoLevel // Default log level to InfoLevel

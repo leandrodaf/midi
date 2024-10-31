@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	log := logger.NewStandardLogger()
+	log := logger.NewZapLogger()
 
 	client, err := midi.NewMIDIClient(
 		contracts.WithLogger(log),

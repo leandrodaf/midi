@@ -38,6 +38,7 @@ type ClientMid struct {
 	midiEventFilter *contracts.MIDIEventFilter
 	coreMIDIConfig  *contracts.CoreMIDIConfig
 	mu              sync.Mutex
+	capturing       bool
 }
 
 // NewMIDIClient initializes a new MIDI client for Darwin with applied options.
@@ -165,8 +166,8 @@ func (m *ClientMid) StartCapture(eventChannel chan contracts.MIDI) {
 		return
 	}
 
-	// Check if capture is already started, stop it if so and log any error
-	if _, loaded := m.eventChannel.Load().(chan contracts.MIDI); loaded {
+	// Check if capture is already started
+	if m.capturing {
 		m.logger.Warn("Capture already started; attempting to stop existing capture")
 		if err := m.Stop(); err != nil {
 			m.logger.Error("Failed to stop existing capture", m.logger.Field().Error("error", err))
@@ -175,6 +176,7 @@ func (m *ClientMid) StartCapture(eventChannel chan contracts.MIDI) {
 
 	m.logger.Info("Starting MIDI event capture")
 	m.eventChannel.Store(eventChannel)
+	m.capturing = true // Atualiza o estado para capturando
 }
 
 // Stop stops MIDI event capturing and disconnects the device.
@@ -192,7 +194,12 @@ func (m *ClientMid) stopCapture() error {
 		m.portConn.Disconnect()
 		m.portConn = nil
 	}
-	m.eventChannel.Store(nil)
+
+	if m.eventChannel.Load() != nil {
+		m.eventChannel.Store(nil)
+		m.capturing = false
+	}
+
 	m.logger.Info("MIDI capture stopped")
 	return nil
 }

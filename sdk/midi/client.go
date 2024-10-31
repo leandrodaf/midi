@@ -14,7 +14,6 @@ import (
 //   - error: An error, if any occurred during the creation of the client.
 func NewMIDIClient(opts ...contracts.Option) (contracts.ClientMIDI, error) {
 	options, err := applyDefaultOptions(opts...)
-
 	if err != nil {
 		return nil, err
 	}
