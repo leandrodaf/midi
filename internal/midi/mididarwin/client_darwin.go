@@ -14,7 +14,7 @@ import (
 	"github.com/youpy/go-coremidi"
 )
 
-// Error definitions
+// Error definitions for MIDI connection and handling issues.
 var (
 	ErrNoMIDIDevices        = errors.New("no MIDI devices found")
 	ErrInvalidMIDIDevice    = errors.New("invalid MIDI device")
@@ -23,25 +23,30 @@ var (
 	ErrIncompleteMIDIPacket = errors.New("incomplete MIDI packet")
 )
 
-// internalPortConnection handles port disconnection.
+// internalPortConnection is an interface for handling disconnection from a MIDI port.
 type internalPortConnection interface {
 	Disconnect()
 }
 
-// ClientMid manages MIDI on Darwin systems.
+// ClientMid manages MIDI operations on Darwin (macOS) systems.
+// This struct handles connections to MIDI devices, manages event capturing,
+// and ensures safe concurrency handling.
 type ClientMid struct {
 	logger          contracts.Logger
-	eventChannel    atomic.Value
-	client          coremidi.Client
-	inputPort       coremidi.InputPort
-	portConn        internalPortConnection
-	midiEventFilter *contracts.MIDIEventFilter
-	coreMIDIConfig  *contracts.CoreMIDIConfig
-	mu              sync.Mutex
-	capturing       bool
+	eventChannel    atomic.Value               // Atomic storage for the event channel to ensure thread safety.
+	client          coremidi.Client            // CoreMIDI client instance for MIDI operations.
+	inputPort       coremidi.InputPort         // Input port for receiving MIDI events.
+	portConn        internalPortConnection     // Connection to the MIDI port.
+	midiEventFilter *contracts.MIDIEventFilter // Filter for specific MIDI events.
+	coreMIDIConfig  *contracts.CoreMIDIConfig  // Configuration for MIDI client.
+	mu              sync.Mutex                 // Mutex for thread safety on shared resources.
+	capturing       bool                       // Indicates if event capturing is currently active.
+	wg              sync.WaitGroup             // WaitGroup for managing concurrent MIDI event processing.
+	stopOnce        sync.Once                  // Ensures Stop() is executed only once.
 }
 
-// NewMIDIClient initializes a new MIDI client for Darwin with applied options.
+// NewMIDIClient initializes a new ClientMid for handling MIDI events on macOS.
+// Applies logging and configurations based on the provided options.
 func NewMIDIClient(options *contracts.ClientOptions) (contracts.ClientMIDI, error) {
 	client, err := coremidi.NewClient(options.CoreMIDIConfig.ClientName)
 	if err != nil {
@@ -57,7 +62,8 @@ func NewMIDIClient(options *contracts.ClientOptions) (contracts.ClientMIDI, erro
 	}, nil
 }
 
-// ListDevices lists available MIDI devices.
+// ListDevices retrieves and returns available MIDI devices.
+// If no devices are found, an error is logged and returned.
 func (m *ClientMid) ListDevices() ([]contracts.DeviceInfo, error) {
 	sources, err := coremidi.AllSources()
 	if err != nil {
@@ -80,7 +86,8 @@ func (m *ClientMid) ListDevices() ([]contracts.DeviceInfo, error) {
 	return devices, nil
 }
 
-// SelectDevice selects a MIDI device by its ID.
+// SelectDevice selects a MIDI device by ID and connects to it.
+// If a device is already connected, it disconnects first.
 func (m *ClientMid) SelectDevice(deviceID int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -121,7 +128,12 @@ func (m *ClientMid) SelectDevice(deviceID int) error {
 }
 
 // handleMIDIMessage processes incoming MIDI messages and applies filtering.
+// If an event channel is valid and the message meets filter criteria, it is sent to the channel.
+// Adds to WaitGroup to ensure safe concurrent processing.
 func (m *ClientMid) handleMIDIMessage(source coremidi.Source, packet coremidi.Packet) {
+	m.wg.Add(1)
+	defer m.wg.Done()
+
 	eventChannel, _ := m.eventChannel.Load().(chan contracts.MIDI)
 	if eventChannel == nil {
 		m.logger.Warn("eventChannel not initialized or of invalid type")
@@ -149,7 +161,7 @@ func (m *ClientMid) handleMIDIMessage(source coremidi.Source, packet coremidi.Pa
 	}
 }
 
-// isCommandAllowed checks if a command is in the allowed commands list.
+// isCommandAllowed verifies if a MIDI command is allowed based on the event filter configuration.
 func isCommandAllowed(command byte, allowedCommands []contracts.MIDICommand) bool {
 	for _, allowedCommand := range allowedCommands {
 		if command == byte(allowedCommand) {
@@ -159,14 +171,17 @@ func isCommandAllowed(command byte, allowedCommands []contracts.MIDICommand) boo
 	return false
 }
 
-// StartCapture initializes MIDI event capturing.
+// StartCapture begins capturing MIDI events by storing the event channel and marking capturing as active.
+// Ensures any ongoing capture is stopped before starting a new one.
 func (m *ClientMid) StartCapture(eventChannel chan contracts.MIDI) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if eventChannel == nil {
 		m.logger.Error("StartCapture called with nil eventChannel")
 		return
 	}
 
-	// Check if capture is already started
 	if m.capturing {
 		m.logger.Warn("Capture already started; attempting to stop existing capture")
 		if err := m.Stop(); err != nil {
@@ -176,30 +191,32 @@ func (m *ClientMid) StartCapture(eventChannel chan contracts.MIDI) {
 
 	m.logger.Info("Starting MIDI event capture")
 	m.eventChannel.Store(eventChannel)
-	m.capturing = true // Atualiza o estado para capturando
+	m.capturing = true
 }
 
-// Stop stops MIDI event capturing and disconnects the device.
+// Stop halts MIDI event capturing, disconnects from the device, and waits for ongoing processing to complete.
+// This function ensures it only executes once, even if called multiple times.
 func (m *ClientMid) Stop() error {
-	m.logger.Info("Stopping MIDI capture")
-	return m.stopCapture()
-}
+	m.stopOnce.Do(func() {
+		m.logger.Info("Stopping MIDI capture")
+		m.mu.Lock()
+		defer m.mu.Unlock()
 
-// stopCapture stops capturing MIDI events and releases resources.
-func (m *ClientMid) stopCapture() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+		if m.capturing {
+			m.capturing = false
 
-	if m.portConn != nil {
-		m.portConn.Disconnect()
-		m.portConn = nil
-	}
+			if m.portConn != nil {
+				m.portConn.Disconnect()
+				m.portConn = nil
+			}
 
-	if m.eventChannel.Load() != nil {
-		m.eventChannel.Store(nil)
-		m.capturing = false
-	}
+			// Store a closed dummy channel to prevent further writes and avoid any panic.
+			dummyChannel := make(chan contracts.MIDI)
+			m.eventChannel.Store(dummyChannel)
 
-	m.logger.Info("MIDI capture stopped")
+			m.logger.Info("MIDI capture stopped")
+			m.wg.Wait() // Wait for all ongoing MIDI event processing to complete
+		}
+	})
 	return nil
 }
