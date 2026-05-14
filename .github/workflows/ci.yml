@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "modernize/**", "feat/**", "fix/**"]
+  pull_request:
+    branches: ["main"]
+
+
+jobs:
+  # ── Lint & vet ────────────────────────────────────────────────────────────
+  vet:
+    name: Vet
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go vet
+        run: go vet ./...
+
+  # ── Build + test matrix ───────────────────────────────────────────────────
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: vet
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS: real CoreMIDI implementation via CGo.
+          # Xcode CLI tools + CoreMIDI/CoreFoundation/CoreServices frameworks
+          # are pre-installed on GitHub-hosted macOS runners.
+          - os: macos-latest
+            cgo: "1"
+            race: "-race"
+
+          # Windows: winmm.dll implementation via pure-Go syscalls.
+          # CGO_ENABLED=1 is required only for the -race detector (gcc is
+          # pre-installed on GitHub Windows runners via MinGW).
+          - os: windows-latest
+            cgo: "1"
+            race: "-race"
+
+          # Linux: not officially supported — dummy stubs compile and all
+          # pure-Go tests (contracts, logger, options) run normally.
+          # CGO_ENABLED=0 avoids needing a C toolchain; -race is skipped
+          # because the race detector requires CGo.
+          - os: ubuntu-latest
+            cgo: "0"
+            race: ""
+
+    env:
+      CGO_ENABLED: ${{ matrix.cgo }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test -v ${{ matrix.race }} ./...

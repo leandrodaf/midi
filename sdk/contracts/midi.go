@@ -1,17 +1,25 @@
 package contracts
 
-// MIDI represents a MIDI event with a timestamp, command, note, and velocity.
+import "context"
+
+// MIDI represents a MIDI event.
 type MIDI struct {
-	Timestamp uint64 // Timestamp indicates the time the event occurred.
-	Command   byte   // Command specifies the type of MIDI event (e.g., Note On, Note Off).
-	Note      byte   // Note represents the MIDI note number (0-127).
-	Velocity  byte   // Velocity indicates the strength of the note being played (0-127).
+	Timestamp uint64
+	Command   byte
+	Note      byte
+	Velocity  byte
 }
 
-// ClientMIDI defines an interface for MIDI client operations.
+// ClientMIDI defines the interface for MIDI client operations.
 type ClientMIDI interface {
-	Stop() error                         // Stops the MIDI client and releases resources.
-	ListDevices() ([]DeviceInfo, error)  // Lists all available MIDI devices.
-	SelectDevice(deviceID int) error     // Selects a MIDI device by its ID for communication.
-	StartCapture(eventChannel chan MIDI) // Starts capturing MIDI events and sends them to the specified channel.
+	// Stop halts MIDI event capture and releases resources.
+	Stop() error
+	// ListDevices returns all available MIDI input devices.
+	ListDevices() ([]DeviceInfo, error)
+	// SelectDevice selects a MIDI device by its index for capture.
+	SelectDevice(deviceID int) error
+	// StartCapture begins capturing MIDI events. It returns a read-only channel
+	// that receives events. The channel is closed when the context is cancelled
+	// or Stop() is called. The channel buffer size is controlled by WithChannelBufferSize.
+	StartCapture(ctx context.Context) (<-chan MIDI, error)
 }

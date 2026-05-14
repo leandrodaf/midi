@@ -1,61 +1,70 @@
 package contracts
 
-// MIDICommand represents the types of MIDI commands for event filtering.
-type MIDICommand byte
-
-const (
-	// NoteOn is the MIDI command for a Note On event (0x90).
-	NoteOn MIDICommand = 0x90
-	// NoteOff is the MIDI command for a Note Off event (0x80).
-	NoteOff MIDICommand = 0x80
-)
-
-// MIDIEventFilter allows users to specify which MIDI commands to capture.
-type MIDIEventFilter struct {
-	Commands []MIDICommand // List of MIDI commands to filter.
-}
-
-// CoreMIDIConfig holds configuration for CoreMIDI.
-type CoreMIDIConfig struct {
-	ClientName string // Name of the MIDI client.
-}
-
-// ClientOptions defines the configuration options for the MIDI client.
+// ClientOptions holds all configuration for the MIDI client.
 type ClientOptions struct {
-	Logger          Logger           // Logger for logging events and errors.
-	LogLevel        LogLevel         // Level of logging to use.
-	LogFilePath     string           // File path for logging if file logging is enabled.
-	MIDIEventFilter *MIDIEventFilter // Optional filter for MIDI events to capture.
-	CoreMIDIConfig  *CoreMIDIConfig  // Configuration specific to CoreMIDI.
+	Logger            Logger
+	LogLevel          LogLevel
+	logLevelSet       bool // true when WithLogLevel was called explicitly
+	LogDestination    LogDestination
+	LogFilePath       string
+	MIDIEventFilter   *MIDIEventFilter
+	CoreMIDIConfig    *CoreMIDIConfig
+	ChannelBufferSize int
+}
+
+// LogLevelIsSet reports whether WithLogLevel was explicitly called.
+func (o *ClientOptions) LogLevelIsSet() bool {
+	return o.logLevelSet
 }
 
 // Option is a function that modifies ClientOptions.
 type Option func(*ClientOptions)
 
-// WithLogger sets the logger for the MIDI client.
+// WithLogger sets a custom logger.
 func WithLogger(l Logger) Option {
 	return func(opts *ClientOptions) {
 		opts.Logger = l
 	}
 }
 
-// WithLogLevel sets the logging level for the MIDI client.
+// WithLogLevel sets the minimum logging level.
 func WithLogLevel(level LogLevel) Option {
 	return func(opts *ClientOptions) {
 		opts.LogLevel = level
+		opts.logLevelSet = true
 	}
 }
 
-// WithMIDIEventFilter sets the MIDI event filter for the MIDI client.
+// WithLogDestination directs log output to console or file.
+// When dest is FileLog, filePath must be provided.
+func WithLogDestination(dest LogDestination, filePath ...string) Option {
+	return func(opts *ClientOptions) {
+		opts.LogDestination = dest
+		if len(filePath) > 0 {
+			opts.LogFilePath = filePath[0]
+		}
+	}
+}
+
+// WithMIDIEventFilter sets a command allowlist. Only listed commands are delivered.
+// Pass nil or omit to receive all commands.
 func WithMIDIEventFilter(filter MIDIEventFilter) Option {
 	return func(opts *ClientOptions) {
 		opts.MIDIEventFilter = &filter
 	}
 }
 
-// WithCoreMIDIConfig sets the CoreMIDI configuration for the MIDI client.
+// WithCoreMIDIConfig sets CoreMIDI-specific configuration (macOS only).
 func WithCoreMIDIConfig(config CoreMIDIConfig) Option {
 	return func(opts *ClientOptions) {
 		opts.CoreMIDIConfig = &config
+	}
+}
+
+// WithChannelBufferSize sets the buffer size of the event channel returned by StartCapture.
+// Default is 100.
+func WithChannelBufferSize(n int) Option {
+	return func(opts *ClientOptions) {
+		opts.ChannelBufferSize = n
 	}
 }

@@ -1,6 +1,6 @@
 # MIDI Client Library
 
-A native Go library for capturing and manipulating MIDI events, supporting macOS and Windows operating systems without the need for external libraries or DLLs.
+A native Go library for capturing and manipulating MIDI events on macOS and Windows without external DLLs.
 
 ## Table of Contents
 
@@ -14,19 +14,17 @@ A native Go library for capturing and manipulating MIDI events, supporting macOS
 
 ## Introduction
 
-This project provides a **fully native** interface for working with MIDI devices, enabling the capture of events and filtering of MIDI commands without relying on any external libraries or dependencies. The library is designed to be easy to use and extensible, making it a straightforward choice for applications that require MIDI manipulation.
+This project provides a fully native interface for working with MIDI devices, enabling event capture and MIDI command filtering without external dependencies.
 
 ## Features
 
-- **Native Support**: Works seamlessly on macOS and Windows without the need for additional libraries or DLLs.
-- **Device Listing**: Easily list available MIDI devices connected to your system.
-- **Device Selection**: Select MIDI devices for capturing events with simple function calls.
-- **Event Capturing**: Capture MIDI events with support for filtering commands, allowing you to focus on the events that matter.
-- **Built-in Logging**: Implemented logging for monitoring and debugging, providing insights into the MIDI event flow.
+- Native support for macOS and Windows.
+- List available MIDI input devices.
+- Select a device and capture MIDI events.
+- Filter incoming MIDI commands.
+- Structured logging with configurable level, destination, and channel buffer size.
 
 ## Installation
-
-To install the library, you can use the following Go command:
 
 ```bash
 go get github.com/leandrodaf/midi
@@ -34,104 +32,96 @@ go get github.com/leandrodaf/midi
 
 ## Quick Usage
 
-Here is a simple example of how to use the library to capture MIDI events:
-
 ```go
 package main
 
 import (
-	"fmt"
+    "context"
+    "fmt"
+    "os/signal"
+    "syscall"
 
-	"github.com/leandrodaf/midi/internal/logger"
-	"github.com/leandrodaf/midi/sdk/contracts"
-	"github.com/leandrodaf/midi/sdk/midi"
+    "github.com/leandrodaf/midi/internal/logger"
+    "github.com/leandrodaf/midi/sdk/contracts"
+    "github.com/leandrodaf/midi/sdk/midi"
 )
 
 func main() {
-	log := logger.NewStandardLogger()
+    log := logger.NewLogger()
 
-	client, err := midi.NewMIDIClient(
-		contracts.WithLogger(log),
-		contracts.WithLogLevel(contracts.InfoLevel),
-		contracts.WithMIDIEventFilter(contracts.MIDIEventFilter{
-			Commands: []contracts.MIDICommand{contracts.NoteOn, contracts.NoteOff},
-		}),
-	)
-	if err != nil {
-		log.Error("Failed to initialize MIDI client", log.Field().Error("error", err))
-		return
-	}
+    client, err := midi.NewMIDIClient(
+        contracts.WithLogger(log),
+        contracts.WithLogLevel(contracts.InfoLevel),
+        contracts.WithChannelBufferSize(100),
+        contracts.WithMIDIEventFilter(contracts.MIDIEventFilter{
+            Commands: []contracts.MIDICommand{contracts.NoteOn, contracts.NoteOff},
+        }),
+    )
+    if err != nil {
+        log.Error("Failed to initialize MIDI client", contracts.ErrField("error", err))
+        return
+    }
 
-	devices, err := client.ListDevices()
-	if err != nil || len(devices) == 0 {
-		log.Error("No MIDI devices found or error listing devices", log.Field().Error("error", err))
-		return
-	}
-	fmt.Println("Available MIDI devices:", devices)
+    devices, err := client.ListDevices()
+    if err != nil || len(devices) == 0 {
+        log.Error("No MIDI devices found", contracts.ErrField("error", err))
+        return
+    }
+    fmt.Println("Available MIDI devices:", devices)
 
-	if err = client.SelectDevice(0); err != nil {
-		log.Error("Failed to select MIDI device", log.Field().Error("error", err))
-		return
-	}
+    if err = client.SelectDevice(0); err != nil {
+        log.Error("Failed to select MIDI device", contracts.ErrField("error", err))
+        return
+    }
 
-	eventChannel := make(chan contracts.MIDI, 100)
-	go func() {
-		for event := range eventChannel {
-			log.Info("MIDI Event",
-				log.Field().Uint64("Timestamp", event.Timestamp),
-				log.Field().Int("Command", int(event.Command)),
-				log.Field().Int("Note", int(event.Note)),
-				log.Field().Int("Velocity", int(event.Velocity)),
-			)
-		}
-	}()
+    ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+    defer stop()
 
-	client.StartCapture(eventChannel)
-	defer client.Stop()
+    events, err := client.StartCapture(ctx)
+    if err != nil {
+        log.Error("Failed to start MIDI capture", contracts.ErrField("error", err))
+        return
+    }
 
-	fmt.Println("Capturing MIDI events... Press Ctrl+C to exit.")
-	select {} // Run indefinitely
+    fmt.Println("Capturing MIDI events... Press Ctrl+C to exit.")
+
+    for event := range events {
+        log.Info("MIDI Event",
+            contracts.Uint64Field("Timestamp", event.Timestamp),
+            contracts.IntField("Command", int(event.Command)),
+            contracts.IntField("Note", int(event.Note)),
+            contracts.IntField("Velocity", int(event.Velocity)),
+        )
+    }
 }
 ```
 
 ## Configuration
 
-The library allows for various configuration options when creating a MIDI client. Here are some of the available options:
+Available options include:
 
-- **Logger**: A custom logger can be provided.
-- **LogLevel**: Logging level (Info, Debug, Error, etc.).
-- **MIDIEventFilter**: A filter to specify which MIDI commands to capture.
-
-Example configuration:
+- `WithLogger` to inject a custom logger.
+- `WithLogLevel` to control the minimum log level.
+- `WithLogDestination` to write logs to console or file.
+- `WithChannelBufferSize` to size the event channel returned by `StartCapture`.
+- `WithMIDIEventFilter` to allow only selected MIDI commands.
+- `WithCoreMIDIConfig` to customize the CoreMIDI client name on macOS.
 
 ```go
 client, err := midi.NewMIDIClient(
-	contracts.WithLogger(log),
-	contracts.WithLogLevel(contracts.InfoLevel),
-	contracts.WithMIDIEventFilter(contracts.MIDIEventFilter{
-		Commands: []contracts.MIDICommand{contracts.NoteOn, contracts.NoteOff},
-	}),
+    contracts.WithLogger(log),
+    contracts.WithLogLevel(contracts.InfoLevel),
+    contracts.WithLogDestination(contracts.ConsoleLog),
+    contracts.WithChannelBufferSize(256),
+    contracts.WithMIDIEventFilter(contracts.MIDIEventFilter{
+        Commands: []contracts.MIDICommand{contracts.NoteOn, contracts.NoteOff},
+    }),
 )
 ```
 
 ## Contribution
 
-Contributions are welcome! To contribute to the project, please follow these steps:
-
-1. **Fork the repository**.
-2. **Create a new branch** for your feature or fix:
-   ```bash
-   git checkout -b feature-your-feature-name
-   ```
-3. **Make your changes** and commit:
-   ```bash
-   git commit -m "Adds new feature"
-   ```
-4. **Push your changes to the remote repository**:
-   ```bash
-   git push origin feature-your-feature-name
-   ```
-5. **Create a Pull Request**.
+Contributions are welcome. Fork the repository, create a branch, make your changes, and open a pull request.
 
 ## License
 

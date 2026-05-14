@@ -6,51 +6,45 @@ import "time"
 type LogLevel int
 
 const (
-	// InfoLevel indicates informational messages that highlight the progress of the application.
-	InfoLevel LogLevel = iota
-	// DebugLevel indicates debug messages that are useful for developers to troubleshoot issues.
-	DebugLevel
-	// ErrorLevel indicates error messages that represent serious issues that need attention.
-	ErrorLevel
-	// WarnLevel indicates potentially harmful situations that should be monitored.
+	DebugLevel LogLevel = iota
+	InfoLevel
 	WarnLevel
-	// FatalLevel indicates very severe error events that will presumably lead the application to abort.
+	ErrorLevel
 	FatalLevel
 )
 
-// LogDestination specifies where the log messages should be directed.
+// LogDestination specifies where log messages are directed.
 type LogDestination string
 
 const (
-	// ConsoleLog directs log messages to the console output.
 	ConsoleLog LogDestination = "console"
-	// FileLog directs log messages to a file.
-	FileLog LogDestination = "file"
+	FileLog    LogDestination = "file"
 )
 
-// Field representa um campo de log com vários tipos de dados.
-type Field interface {
-	Bool(key string, val bool) Field
-	Int(key string, val int) Field
-	Float64(key string, val float64) Field
-	String(key string, val string) Field
-	Time(key string, val time.Time) Field
-	Int64(key string, val int64) Field
-	Error(key string, val error) Field
-	Uint64(key string, val uint64) Field
-	Uint8(key string, val uint8) Field
+// Field is a structured log field holding a key-value pair.
+type Field struct {
+	Key   string
+	Value any
 }
 
-// Logger fornece métodos para registrar mensagens em diferentes níveis.
+// Standalone Field constructors — use these instead of logger.Field().XXX().
+func BoolField(key string, val bool) Field       { return Field{key, val} }
+func IntField(key string, val int) Field         { return Field{key, val} }
+func Float64Field(key string, val float64) Field { return Field{key, val} }
+func StringField(key string, val string) Field   { return Field{key, val} }
+func TimeField(key string, val time.Time) Field  { return Field{key, val} }
+func Int64Field(key string, val int64) Field     { return Field{key, val} }
+func ErrField(key string, val error) Field       { return Field{key, val} }
+func Uint64Field(key string, val uint64) Field   { return Field{key, val} }
+func Uint8Field(key string, val uint8) Field     { return Field{key, val} }
+
+// Logger provides methods for structured logging.
 type Logger interface {
 	Info(msg string, fields ...Field)
 	Error(msg string, fields ...Field)
 	Debug(msg string, fields ...Field)
 	Warn(msg string, fields ...Field)
 	Fatal(msg string, fields ...Field)
-
-	Field() Field
-
 	SetLevel(level LogLevel)
 	SetDestination(dest LogDestination, filePath ...string)
 }
