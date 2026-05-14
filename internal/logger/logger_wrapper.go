@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/leandrodaf/midi/sdk/contracts"
+	"github.com/leandrodaf/midi/v2/sdk/contracts"
 )
 
 type stdLogger struct {

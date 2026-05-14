@@ -8,9 +8,9 @@ import (
 	"io"
 	"testing"
 
-	"github.com/leandrodaf/midi/internal/logger"
-	"github.com/leandrodaf/midi/internal/midi/mididarwin"
-	"github.com/leandrodaf/midi/sdk/contracts"
+	"github.com/leandrodaf/midi/v2/internal/logger"
+	"github.com/leandrodaf/midi/v2/internal/midi/mididarwin"
+	"github.com/leandrodaf/midi/v2/sdk/contracts"
 )
 
 func newDummyDarwinClient(t *testing.T) contracts.ClientMIDI {

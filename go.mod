@@ -1,4 +1,4 @@
-module github.com/leandrodaf/midi
+module github.com/leandrodaf/midi/v2
 
 go 1.26
 

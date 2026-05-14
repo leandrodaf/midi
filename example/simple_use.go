@@ -6,9 +6,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/leandrodaf/midi/sdk/logger"
-	"github.com/leandrodaf/midi/sdk/contracts"
-	"github.com/leandrodaf/midi/sdk/midi"
+	"github.com/leandrodaf/midi/v2/sdk/logger"
+	"github.com/leandrodaf/midi/v2/sdk/contracts"
+	"github.com/leandrodaf/midi/v2/sdk/midi"
 )
 
 func main() {

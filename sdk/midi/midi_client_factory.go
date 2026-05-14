@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/leandrodaf/midi/internal/midi/mididarwin"
-	"github.com/leandrodaf/midi/internal/midi/midiwindows"
-	"github.com/leandrodaf/midi/sdk/contracts"
+	"github.com/leandrodaf/midi/v2/internal/midi/mididarwin"
+	"github.com/leandrodaf/midi/v2/internal/midi/midiwindows"
+	"github.com/leandrodaf/midi/v2/sdk/contracts"
 )
 
 // ErrUnsupportedOS is returned when the operating system is not supported by the MIDI client.

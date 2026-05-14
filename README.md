@@ -35,7 +35,7 @@ This project provides a fully native interface for working with MIDI devices, en
 ## Installation
 
 ```bash
-go get github.com/leandrodaf/midi@v2.0.0
+go get github.com/leandrodaf/midi/v2@v2.0.2
 ```
 
 ## Quick Usage
@@ -49,9 +49,9 @@ import (
     "os/signal"
     "syscall"
 
-    "github.com/leandrodaf/midi/sdk/contracts"
-    "github.com/leandrodaf/midi/sdk/logger"
-    "github.com/leandrodaf/midi/sdk/midi"
+    "github.com/leandrodaf/midi/v2/sdk/contracts"
+    "github.com/leandrodaf/midi/v2/sdk/logger"
+    "github.com/leandrodaf/midi/v2/sdk/midi"
 )
 
 func main() {

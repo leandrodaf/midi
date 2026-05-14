@@ -3,7 +3,7 @@ package contracts_test
 import (
 	"testing"
 
-	"github.com/leandrodaf/midi/sdk/contracts"
+	"github.com/leandrodaf/midi/v2/sdk/contracts"
 )
 
 func TestIsCommandAllowed_NilFilter(t *testing.T) {

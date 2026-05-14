@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/leandrodaf/midi/internal/logger"
-	"github.com/leandrodaf/midi/sdk/contracts"
+	"github.com/leandrodaf/midi/v2/internal/logger"
+	"github.com/leandrodaf/midi/v2/sdk/contracts"
 )
 
 func TestNewLogger_NotNil(t *testing.T) {

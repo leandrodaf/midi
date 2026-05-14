@@ -1,7 +1,7 @@
 package midi
 
 import (
-	"github.com/leandrodaf/midi/sdk/contracts"
+	"github.com/leandrodaf/midi/v2/sdk/contracts"
 )
 
 // NewMIDIClient creates a new MIDI client with the specified options.

@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/leandrodaf/midi/internal/coremidi"
-	"github.com/leandrodaf/midi/sdk/contracts"
+	"github.com/leandrodaf/midi/v2/internal/coremidi"
+	"github.com/leandrodaf/midi/v2/sdk/contracts"
 )
 
 var (

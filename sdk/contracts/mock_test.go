@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/leandrodaf/midi/sdk/contracts"
+	"github.com/leandrodaf/midi/v2/sdk/contracts"
 )
 
 var _ contracts.ClientMIDI = (*contracts.MockMIDIClient)(nil)

@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/leandrodaf/midi/sdk/contracts"
+	"github.com/leandrodaf/midi/v2/sdk/contracts"
 )
 
 type dummyMIDIClient struct {

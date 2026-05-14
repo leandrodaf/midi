@@ -12,7 +12,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/leandrodaf/midi/sdk/contracts"
+	"github.com/leandrodaf/midi/v2/sdk/contracts"
 	"golang.org/x/sys/windows"
 )
 

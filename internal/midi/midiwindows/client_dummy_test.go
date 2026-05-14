@@ -8,9 +8,9 @@ import (
 	"io"
 	"testing"
 
-	"github.com/leandrodaf/midi/internal/logger"
-	"github.com/leandrodaf/midi/internal/midi/midiwindows"
-	"github.com/leandrodaf/midi/sdk/contracts"
+	"github.com/leandrodaf/midi/v2/internal/logger"
+	"github.com/leandrodaf/midi/v2/internal/midi/midiwindows"
+	"github.com/leandrodaf/midi/v2/sdk/contracts"
 )
 
 func newDummyWindowsClient(t *testing.T) contracts.ClientMIDI {

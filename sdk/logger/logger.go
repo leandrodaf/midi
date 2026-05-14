@@ -4,8 +4,8 @@
 package logger
 
 import (
-	internal "github.com/leandrodaf/midi/internal/logger"
-	"github.com/leandrodaf/midi/sdk/contracts"
+	internal "github.com/leandrodaf/midi/v2/internal/logger"
+	"github.com/leandrodaf/midi/v2/sdk/contracts"
 )
 
 // NewLogger returns a structured logger that writes to stderr at InfoLevel.
