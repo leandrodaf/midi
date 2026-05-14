@@ -46,13 +46,11 @@ jobs:
             cgo: "1"
             race: "-race"
 
-          # Linux: not officially supported — dummy stubs compile and all
-          # pure-Go tests (contracts, logger, options) run normally.
-          # CGO_ENABLED=0 avoids needing a C toolchain; -race is skipped
-          # because the race detector requires CGo.
+          # Linux: ALSA raw MIDI via CGo (libasound2-dev installed below).
+          # Race detector enabled since CGo is available.
           - os: ubuntu-latest
-            cgo: "0"
-            race: ""
+            cgo: "1"
+            race: "-race"
 
     env:
       CGO_ENABLED: ${{ matrix.cgo }}
@@ -64,6 +62,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Install ALSA dev headers (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y libasound2-dev
 
       - name: Build
         run: go build ./...

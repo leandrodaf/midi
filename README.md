@@ -1,6 +1,6 @@
 # MIDI Client Library
 
-A native Go library for capturing MIDI events on macOS and Windows without external DLLs.
+A native Go library for capturing MIDI events on macOS, Windows, and Linux without external Go dependencies.
 
 [![CI](https://github.com/leandrodaf/midi/actions/workflows/ci.yml/badge.svg)](https://github.com/leandrodaf/midi/actions/workflows/ci.yml)
 
@@ -20,11 +20,11 @@ A native Go library for capturing MIDI events on macOS and Windows without exter
 
 ## Introduction
 
-This project provides a fully native interface for working with MIDI devices, enabling event capture and MIDI command filtering without external dependencies. macOS uses CoreMIDI via CGo; Windows uses `winmm.dll` via pure-Go syscalls.
+This project provides a fully native interface for working with MIDI devices, enabling event capture and MIDI command filtering without external Go dependencies. macOS uses CoreMIDI via CGo; Windows uses `winmm.dll` via pure-Go syscalls; Linux uses ALSA raw MIDI via CGo.
 
 ## Features
 
-- Native support for macOS (CoreMIDI) and Windows (winmm.dll).
+- Native support for macOS (CoreMIDI), Windows (winmm.dll), and **Linux (ALSA)**.
 - List available MIDI input devices.
 - Select a device and capture MIDI events over a Go channel.
 - Context-based lifecycle — cancel the context to stop capture and close the channel.
@@ -35,7 +35,7 @@ This project provides a fully native interface for working with MIDI devices, en
 ## Installation
 
 ```bash
-go get github.com/leandrodaf/midi/v2@v2.0.2
+go get github.com/leandrodaf/midi/v2@v2.1.0
 ```
 
 ## Quick Usage
@@ -173,13 +173,15 @@ fmt.Println("StartCapture called:", mock.StartCaptureCalls) // 1
 
 ## Platform Notes
 
-| Platform | Implementation | CGo |
-|---|---|---|
-| macOS | CoreMIDI via CGo (`-framework CoreMIDI`) | Required |
-| Windows | `winmm.dll` via pure-Go syscalls | Not required |
-| Linux / other | Stub — methods return errors | Not required |
+| Platform | Implementation | CGo | Build requirement |
+|---|---|---|---|
+| macOS | CoreMIDI (`-framework CoreMIDI`) | Required | Xcode CLI tools (pre-installed on macOS runners) |
+| Windows | `winmm.dll` via pure-Go syscalls | Not required | None |
+| Linux | ALSA raw MIDI (`-lasound`) | Required | `libasound2-dev` (`apt-get install libasound2-dev`) |
+| Other | Stub — methods return errors | Not required | None |
 
-The library compiles on all platforms. On unsupported platforms the client is a no-op stub that returns errors from every method.
+On Linux, rebuild with `CGO_ENABLED=1` (default) and ensure `libasound2-dev` is installed.
+If `CGO_ENABLED=0` is forced on Linux, the library compiles but all methods return `ErrCGORequired`.
 
 ## Contribution
 
