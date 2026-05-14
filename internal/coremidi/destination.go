@@ -1,0 +1,121 @@
+//go:build darwin
+// +build darwin
+
+package coremidi
+
+/*
+#cgo LDFLAGS: -framework CoreMIDI -framework CoreFoundation
+#include <CoreMIDI/CoreMIDI.h>
+#include <stdio.h>
+#include <unistd.h>
+
+static void MIDIDestinationInputProc(const MIDIPacketList *pktlist, void *readProcRefCon, void *srcConnRefCon)
+{
+  MIDIPacket *packet = (MIDIPacket *)&(pktlist->packet[0]);
+  UInt32 packetCount = pktlist->numPackets;
+  int i, n;
+  Byte *data;
+
+  int lengthBytes = 2;
+  int timeStampBytes = 8;
+
+  for (i = 0; i < packetCount; i++) {
+    data = calloc(sizeof(Byte), packet->length + lengthBytes + timeStampBytes);
+
+    memcpy(data, &(packet->length), lengthBytes);
+    memcpy(data + lengthBytes, &(packet->timeStamp), timeStampBytes);
+    memcpy(data + lengthBytes + timeStampBytes, packet->data, packet->length);
+
+    n = write(*(int *)readProcRefCon, data, packet->length + lengthBytes + timeStampBytes);
+    packet = MIDIPacketNext(packet);
+    free(data);
+  }
+}
+
+typedef void (*midi_destination_input_proc)(const MIDIPacketList *pktlist, void *readProcRefCon, void *srcConnRefCon);
+
+static midi_destination_input_proc getMidiDestinationProc()
+{
+  return *MIDIDestinationInputProc;
+}
+
+*/
+import "C"
+import (
+	"errors"
+	"fmt"
+	"syscall"
+	"unsafe"
+)
+
+type Destination struct {
+	endpoint C.MIDIEndpointRef
+	*Object
+}
+
+func AllDestinations() (destinations []Destination, err error) {
+	numberOfDestinations := numberOfDestinations()
+	destinations = make([]Destination, numberOfDestinations)
+
+	for i := range destinations {
+		destination := C.MIDIGetDestination(C.ItemCount(i))
+
+		if destination == (C.MIDIEndpointRef)(0) {
+			err = errors.New("failed to get destination")
+
+			return
+		}
+
+		destinations[i] = Destination{
+			destination,
+			&Object{C.MIDIObjectRef(destination)}}
+	}
+
+	return
+}
+
+func NewDestination(client Client, name string, readProc func(packet Packet)) (destination Destination, err error) {
+	var endpointRef C.MIDIEndpointRef
+
+	fd := make([]int, 2)
+	if pipeErr := syscall.Pipe(fd); pipeErr != nil {
+		return destination, fmt.Errorf("failed to create pipe: %w", pipeErr)
+	}
+	readFd := fd[0]
+	writeFd := C.int(fd[1])
+
+	go processIncomingPacket(
+		readFd,
+		func(data []byte, timeStamp uint64) {
+			readProc(NewPacket(data, timeStamp))
+		},
+	)
+
+	stringToCFString(name, func(cfName C.CFStringRef) {
+		osStatus := C.MIDIDestinationCreate(
+			client.client,
+			cfName,
+			(C.MIDIReadProc)(C.getMidiDestinationProc()),
+			unsafe.Pointer(&writeFd),
+			&endpointRef,
+		)
+
+		if osStatus != C.noErr {
+			// Close the write end so the reader sees EOF and exits.
+			syscall.Close(int(writeFd))
+			err = fmt.Errorf("%d: failed to create a destination", int(osStatus))
+		} else {
+			destination = Destination{endpointRef, &Object{C.MIDIObjectRef(endpointRef)}}
+		}
+	})
+
+	return
+}
+
+func (dest Destination) Dispose() {
+	C.MIDIEndpointDispose(dest.endpoint)
+}
+
+func numberOfDestinations() int {
+	return int(C.ItemCount(C.MIDIGetNumberOfDestinations()))
+}

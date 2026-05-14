@@ -4,6 +4,7 @@
 package midiwindows
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -15,26 +16,31 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Type definitions for MIDI handles
+var (
+	ErrNoMIDIDevices       = errors.New("no MIDI devices found")
+	ErrInvalidDeviceHandle = errors.New("invalid MIDI device handle")
+	ErrOpenFailed          = errors.New("failed to open MIDI device")
+	ErrStartCaptureFailed  = errors.New("failed to start MIDI capture")
+	ErrStopCaptureFailed   = errors.New("failed to stop MIDI capture")
+	ErrCloseDeviceFailed   = errors.New("failed to close MIDI device")
+)
+
 type HMIDIIN windows.Handle
 
-// Constants for callback flags
 const (
-	CALLBACK_FUNCTION = 0x00030000 // Indicates that the callback is a function
-	MIDI_IO_STATUS    = 0x00000020 // MIDI input/output status
+	CALLBACK_FUNCTION = 0x00030000
+	MIDI_IO_STATUS    = 0x00000020
 )
 
-// Constants for MIDI message types
 const (
-	MIM_OPEN      = 0x3C1 // MIDI device opened
-	MIM_CLOSE     = 0x3C2 // MIDI device closed
-	MIM_DATA      = 0x3C3 // MIDI data received
-	MIM_ERROR     = 0x3C5 // MIDI error
-	MIM_LONGERROR = 0x3C6 // Long MIDI error
-	MIM_MOREDATA  = 0x3CC // More MIDI data available
+	MIM_OPEN      = 0x3C1
+	MIM_CLOSE     = 0x3C2
+	MIM_DATA      = 0x3C3
+	MIM_ERROR     = 0x3C5
+	MIM_LONGERROR = 0x3C6
+	MIM_MOREDATA  = 0x3CC
 )
 
-// Struct representing MIDI device capabilities
 type midiInCaps struct {
 	wMid           uint16
 	wPid           uint16
@@ -43,19 +49,20 @@ type midiInCaps struct {
 	dwSupport      uint32
 }
 
-// ClientMid manages MIDI on Windows
 type ClientMid struct {
-	logger          contracts.Logger
-	eventChannel    atomic.Value
-	handle          HMIDIIN
-	portConn        bool
-	mu              sync.Mutex
-	callback        uintptr
-	midiEventFilter *contracts.MIDIEventFilter
-	coreMIDIConfig  *contracts.CoreMIDIConfig
+	logger            contracts.Logger
+	eventChannel      atomic.Value
+	handle            HMIDIIN
+	portConn          bool
+	mu                sync.Mutex
+	callback          uintptr
+	midiEventFilter   *contracts.MIDIEventFilter
+	coreMIDIConfig    *contracts.CoreMIDIConfig
+	channelBufferSize int
+	outCh             chan contracts.MIDI
+	closeChOnce       sync.Once
 }
 
-// Load the winmm.dll library and required functions
 var (
 	winmm                = windows.NewLazySystemDLL("winmm.dll")
 	procMidiInGetNumDevs = winmm.NewProc("midiInGetNumDevs")
@@ -66,49 +73,41 @@ var (
 	procMidiInClose      = winmm.NewProc("midiInClose")
 )
 
-// NewMIDIClient creates a MIDI client for Windows
 func NewMIDIClient(options *contracts.ClientOptions) (contracts.ClientMIDI, error) {
 	options.Logger.Info("MIDI client created for Windows")
-
 	return &ClientMid{
-		logger:          options.Logger,
-		midiEventFilter: options.MIDIEventFilter,
-		coreMIDIConfig:  options.CoreMIDIConfig,
+		logger:            options.Logger,
+		midiEventFilter:   options.MIDIEventFilter,
+		coreMIDIConfig:    options.CoreMIDIConfig,
+		channelBufferSize: options.ChannelBufferSize,
 	}, nil
 }
 
-// ListDevices lists the available MIDI devices
 func (m *ClientMid) ListDevices() ([]contracts.DeviceInfo, error) {
 	r0, _, _ := procMidiInGetNumDevs.Call()
-	numDevices := uint32(r0)
-	if numDevices == 0 {
-		m.logger.Warn("No MIDI devices found")
-		return nil, errors.New("no MIDI devices found")
+	if uint32(r0) == 0 {
+		m.logger.Warn(ErrNoMIDIDevices.Error())
+		return nil, ErrNoMIDIDevices
 	}
-
+	numDevices := uint32(r0)
 	devices := make([]contracts.DeviceInfo, numDevices)
 	for i := uint32(0); i < numDevices; i++ {
 		var caps midiInCaps
-		r1, _, _ := procMidiInGetDevCaps.Call(
-			uintptr(i),
-			uintptr(unsafe.Pointer(&caps)),
-			unsafe.Sizeof(caps),
-		)
+		r1, _, _ := procMidiInGetDevCaps.Call(uintptr(i), uintptr(unsafe.Pointer(&caps)), unsafe.Sizeof(caps))
 		if r1 != 0 {
 			m.logger.Warn(fmt.Sprintf("Failed to get information for MIDI device %d", i))
 			continue
 		}
-		deviceName := windows.UTF16ToString(caps.szPname[:])
+		name := windows.UTF16ToString(caps.szPname[:])
 		devices[i] = contracts.DeviceInfo{
-			Name:         deviceName,
-			EntityName:   deviceName,
+			Name:         name,
+			EntityName:   name,
 			Manufacturer: fmt.Sprintf("MID: %d PID: %d", caps.wMid, caps.wPid),
 		}
 	}
 	return devices, nil
 }
 
-// SelectDevice selects a MIDI device
 func (m *ClientMid) SelectDevice(deviceID int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -120,57 +119,65 @@ func (m *ClientMid) SelectDevice(deviceID int) error {
 	}
 
 	m.callback = windows.NewCallback(midiInCallback)
-	fdwOpen := CALLBACK_FUNCTION | MIDI_IO_STATUS
-
-	r1, _, err := procMidiInOpen.Call(
+	r1, _, _ := procMidiInOpen.Call(
 		uintptr(unsafe.Pointer(&m.handle)),
 		uintptr(deviceID),
 		m.callback,
 		uintptr(unsafe.Pointer(m)),
-		uintptr(fdwOpen),
+		uintptr(CALLBACK_FUNCTION|MIDI_IO_STATUS),
 	)
 	if r1 != 0 {
-		m.logger.Error(fmt.Sprintf("Failed to open MIDI device %d: %v", deviceID, err))
-		return fmt.Errorf("failed to open MIDI device %d: %v", deviceID, err)
+		return fmt.Errorf("%w %d: return code %d", ErrOpenFailed, deviceID, r1)
 	}
-
 	m.portConn = true
 	m.logger.Info(fmt.Sprintf("MIDI device %d connected", deviceID))
 	return nil
 }
 
-// StartCapture initializes MIDI event capture
-func (m *ClientMid) StartCapture(eventChannel chan contracts.MIDI) {
+func (m *ClientMid) closeOutCh() {
+	m.closeChOnce.Do(func() {
+		if m.outCh != nil {
+			close(m.outCh)
+		}
+	})
+}
+
+func (m *ClientMid) StartCapture(ctx context.Context) (<-chan contracts.MIDI, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if !m.portConn {
-		m.logger.Error("Cannot start capture: No MIDI device selected")
-		return
+		return nil, fmt.Errorf("no MIDI device selected")
 	}
 
-	if _, ok := m.eventChannel.Load().(chan contracts.MIDI); ok {
-		m.logger.Warn("Capture already started")
-		return
+	size := m.channelBufferSize
+	if size <= 0 {
+		size = 100
 	}
-
-	m.eventChannel.Store(eventChannel)
+	ch := make(chan contracts.MIDI, size)
+	m.outCh = ch
+	m.closeChOnce = sync.Once{}
+	m.eventChannel.Store((chan contracts.MIDI)(ch))
 
 	if m.handle == 0 {
-		m.logger.Error("Invalid MIDI device handle")
-		return
+		return nil, ErrInvalidDeviceHandle
 	}
-
-	r1, _, err := procMidiInStart.Call(uintptr(m.handle))
+	r1, _, _ := procMidiInStart.Call(uintptr(m.handle))
 	if r1 != 0 {
-		m.logger.Error(fmt.Sprintf("Failed to start MIDI capture: %v", err))
-		return
+		m.eventChannel.Store(make(chan contracts.MIDI))
+		return nil, fmt.Errorf("%w: return code %d", ErrStartCaptureFailed, r1)
 	}
 
 	m.logger.Info("MIDI capture started")
+
+	go func() {
+		<-ctx.Done()
+		_ = m.Stop()
+	}()
+
+	return ch, nil
 }
 
-// midiInCallback processes incoming MIDI messages
 func midiInCallback(hMidiIn uintptr, wMsg uint32, dwInstance uintptr, dwParam1 uintptr, dwParam2 uintptr) uintptr {
 	m := (*ClientMid)(unsafe.Pointer(dwInstance))
 
@@ -183,7 +190,6 @@ func midiInCallback(hMidiIn uintptr, wMsg uint32, dwInstance uintptr, dwParam1 u
 		if dwParam2 == 0 {
 			return 0
 		}
-
 		status := byte(dwParam1 & 0xFF)
 		data1 := byte((dwParam1 >> 8) & 0xFF)
 		data2 := byte((dwParam1 >> 16) & 0xFF)
@@ -191,29 +197,27 @@ func midiInCallback(hMidiIn uintptr, wMsg uint32, dwInstance uintptr, dwParam1 u
 		command := status & 0xF0
 		channel := status & 0x0F
 
-		midiEvent := contracts.MIDI{
+		event := contracts.MIDI{
 			Timestamp: uint64(time.Now().UTC().UnixNano()),
 			Command:   command,
 			Note:      data1,
 			Velocity:  data2,
 		}
 
-		// Apply the MIDI event filter, checking if the command is allowed
-		if m.midiEventFilter != nil && !isCommandAllowed(midiEvent.Command, m.midiEventFilter.Commands) {
+		if !contracts.IsCommandAllowed(event.Command, m.midiEventFilter) {
 			m.logger.Debug(fmt.Sprintf("MIDI command 0x%X filtered out", command))
 			return 0
 		}
 
-		if command == byte(contracts.NoteOn) && midiEvent.Velocity == 0 || command == byte(contracts.NoteOff) {
-			m.logger.Debug(fmt.Sprintf("Note Off: Channel %d, Note %d", channel+1, midiEvent.Note))
+		if command == byte(contracts.NoteOn) && event.Velocity == 0 || command == byte(contracts.NoteOff) {
+			m.logger.Debug(fmt.Sprintf("Note Off: Channel %d, Note %d", channel+1, event.Note))
 		} else if command == byte(contracts.NoteOn) {
-			m.logger.Debug(fmt.Sprintf("Note On: Channel %d, Note %d, Velocity %d", channel+1, midiEvent.Note, midiEvent.Velocity))
+			m.logger.Debug(fmt.Sprintf("Note On: Channel %d, Note %d, Velocity %d", channel+1, event.Note, event.Velocity))
 		}
 
-		// Send the event to the channel, with a warning in case the channel is full
 		if ch, ok := m.eventChannel.Load().(chan contracts.MIDI); ok && ch != nil {
 			select {
-			case ch <- midiEvent:
+			case ch <- event:
 			default:
 				m.logger.Warn("MIDI event channel is full; event discarded")
 			}
@@ -225,57 +229,38 @@ func midiInCallback(hMidiIn uintptr, wMsg uint32, dwInstance uintptr, dwParam1 u
 	default:
 		m.logger.Warn(fmt.Sprintf("Unknown MIDI message: 0x%X", wMsg))
 	}
-
 	return 0
 }
 
-// Stop terminates MIDI event capture and disconnects the device
 func (m *ClientMid) Stop() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if !m.portConn {
-		m.logger.Warn("No MIDI device is connected")
 		return nil
 	}
-
 	if err := m.stopCapture(); err != nil {
 		return fmt.Errorf("failed to stop MIDI capture: %w", err)
 	}
 	m.logger.Info("MIDI capture stopped and device closed")
+	m.closeOutCh()
 	return nil
 }
 
-// stopCapture stops the capture and releases resources
 func (m *ClientMid) stopCapture() error {
 	if m.handle == 0 {
-		return fmt.Errorf("invalid MIDI device handle")
+		return ErrInvalidDeviceHandle
 	}
-
-	r1, _, err := procMidiInStop.Call(uintptr(m.handle))
+	r1, _, _ := procMidiInStop.Call(uintptr(m.handle))
 	if r1 != 0 {
-		m.logger.Error(fmt.Sprintf("Failed to stop MIDI capture: %v", err))
-		return err
+		return fmt.Errorf("%w: return code %d", ErrStopCaptureFailed, r1)
 	}
-
-	r1, _, err = procMidiInClose.Call(uintptr(m.handle))
+	r1, _, _ = procMidiInClose.Call(uintptr(m.handle))
 	if r1 != 0 {
-		m.logger.Error(fmt.Sprintf("Failed to close MIDI device: %v", err))
-		return err
+		return fmt.Errorf("%w: return code %d", ErrCloseDeviceFailed, r1)
 	}
-
 	m.portConn = false
 	m.handle = 0
-	m.eventChannel.Store(nil)
+	m.eventChannel.Store(make(chan contracts.MIDI))
 	return nil
-}
-
-// isCommandAllowed checks if the MIDI command is allowed by the filter
-func isCommandAllowed(command byte, allowedCommands []contracts.MIDICommand) bool {
-	for _, allowedCommand := range allowedCommands {
-		if command == byte(allowedCommand) {
-			return true
-		}
-	}
-	return false
 }
