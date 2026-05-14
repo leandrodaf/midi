@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "modernize/**", "feat/**", "fix/**"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  # ── Lint & vet ────────────────────────────────────────────────────────────
+  vet:
+    name: Vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go vet
+        run: go vet ./...
+
+  # ── Build + test matrix ───────────────────────────────────────────────────
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: vet
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS: real CoreMIDI implementation via CGo.
+          # Xcode CLI tools + CoreMIDI/CoreFoundation/CoreServices frameworks
+          # are pre-installed on GitHub-hosted macOS runners.
+          - os: macos-latest
+            cgo: "1"
+            notes: "CoreMIDI (CGo)"
+
+          # Windows: real winmm.dll implementation via pure-Go syscalls.
+          # No CGo required.
+          - os: windows-latest
+            cgo: "0"
+            notes: "winmm.dll (syscalls)"
+
+          # Linux: not officially supported — dummy stubs compile and all
+          # pure-Go tests (contracts, logger, options) run normally.
+          - os: ubuntu-latest
+            cgo: "0"
+            notes: "dummy stubs (unsupported platform)"
+
+    env:
+      CGO_ENABLED: ${{ matrix.cgo }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test -v -race ./...
