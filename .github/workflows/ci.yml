@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: ["main"]
 
-# Use Node.js 24 for all actions to avoid Node.js 20 deprecation warnings.
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # ── Lint & vet ────────────────────────────────────────────────────────────
@@ -18,8 +15,8 @@ jobs:
     env:
       CGO_ENABLED: "0"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -61,9 +58,9 @@ jobs:
       CGO_ENABLED: ${{ matrix.cgo }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
