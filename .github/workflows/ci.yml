@@ -6,11 +6,17 @@ on:
   pull_request:
     branches: ["main"]
 
+# Use Node.js 24 for all actions to avoid Node.js 20 deprecation warnings.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   # ── Lint & vet ────────────────────────────────────────────────────────────
   vet:
     name: Vet
     runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -34,19 +40,22 @@ jobs:
           # are pre-installed on GitHub-hosted macOS runners.
           - os: macos-latest
             cgo: "1"
-            notes: "CoreMIDI (CGo)"
+            race: "-race"
 
-          # Windows: real winmm.dll implementation via pure-Go syscalls.
-          # No CGo required.
+          # Windows: winmm.dll implementation via pure-Go syscalls.
+          # CGO_ENABLED=1 is required only for the -race detector (gcc is
+          # pre-installed on GitHub Windows runners via MinGW).
           - os: windows-latest
-            cgo: "0"
-            notes: "winmm.dll (syscalls)"
+            cgo: "1"
+            race: "-race"
 
           # Linux: not officially supported — dummy stubs compile and all
           # pure-Go tests (contracts, logger, options) run normally.
+          # CGO_ENABLED=0 avoids needing a C toolchain; -race is skipped
+          # because the race detector requires CGo.
           - os: ubuntu-latest
             cgo: "0"
-            notes: "dummy stubs (unsupported platform)"
+            race: ""
 
     env:
       CGO_ENABLED: ${{ matrix.cgo }}
@@ -63,4 +72,4 @@ jobs:
         run: go build ./...
 
       - name: Test
-        run: go test -v -race ./...
+        run: go test -v ${{ matrix.race }} ./...
