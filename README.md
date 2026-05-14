@@ -1,6 +1,8 @@
 # MIDI Client Library
 
-A native Go library for capturing and manipulating MIDI events on macOS and Windows without external DLLs.
+A native Go library for capturing MIDI events on macOS and Windows without external DLLs.
+
+[![CI](https://github.com/leandrodaf/midi/actions/workflows/ci.yml/badge.svg)](https://github.com/leandrodaf/midi/actions/workflows/ci.yml)
 
 ## Table of Contents
 
@@ -9,25 +11,31 @@ A native Go library for capturing and manipulating MIDI events on macOS and Wind
 - [Installation](#installation)
 - [Quick Usage](#quick-usage)
 - [Configuration](#configuration)
+- [Filtering MIDI Commands](#filtering-midi-commands)
+- [Custom Logger](#custom-logger)
+- [Testing with MockMIDIClient](#testing-with-mockmidiClient)
+- [Platform Notes](#platform-notes)
 - [Contribution](#contribution)
 - [License](#license)
 
 ## Introduction
 
-This project provides a fully native interface for working with MIDI devices, enabling event capture and MIDI command filtering without external dependencies.
+This project provides a fully native interface for working with MIDI devices, enabling event capture and MIDI command filtering without external dependencies. macOS uses CoreMIDI via CGo; Windows uses `winmm.dll` via pure-Go syscalls.
 
 ## Features
 
-- Native support for macOS and Windows.
+- Native support for macOS (CoreMIDI) and Windows (winmm.dll).
 - List available MIDI input devices.
-- Select a device and capture MIDI events.
-- Filter incoming MIDI commands.
-- Structured logging with configurable level, destination, and channel buffer size.
+- Select a device and capture MIDI events over a Go channel.
+- Context-based lifecycle — cancel the context to stop capture and close the channel.
+- Filter incoming MIDI commands via an allowlist.
+- Structured logging with configurable level and destination.
+- `MockMIDIClient` for easy unit testing in consumer code.
 
 ## Installation
 
 ```bash
-go get github.com/leandrodaf/midi
+go get github.com/leandrodaf/midi@v2.0.0
 ```
 
 ## Quick Usage
@@ -41,8 +49,8 @@ import (
     "os/signal"
     "syscall"
 
-    "github.com/leandrodaf/midi/internal/logger"
     "github.com/leandrodaf/midi/sdk/contracts"
+    "github.com/leandrodaf/midi/sdk/logger"
     "github.com/leandrodaf/midi/sdk/midi"
 )
 
@@ -51,8 +59,6 @@ func main() {
 
     client, err := midi.NewMIDIClient(
         contracts.WithLogger(log),
-        contracts.WithLogLevel(contracts.InfoLevel),
-        contracts.WithChannelBufferSize(100),
         contracts.WithMIDIEventFilter(contracts.MIDIEventFilter{
             Commands: []contracts.MIDICommand{contracts.NoteOn, contracts.NoteOff},
         }),
@@ -84,40 +90,96 @@ func main() {
     }
 
     fmt.Println("Capturing MIDI events... Press Ctrl+C to exit.")
-
     for event := range events {
-        log.Info("MIDI Event",
-            contracts.Uint64Field("Timestamp", event.Timestamp),
-            contracts.IntField("Command", int(event.Command)),
-            contracts.IntField("Note", int(event.Note)),
-            contracts.IntField("Velocity", int(event.Velocity)),
-        )
+        fmt.Printf("cmd=0x%02X note=%d velocity=%d\n", event.Command, event.Note, event.Velocity)
     }
 }
 ```
 
 ## Configuration
 
-Available options include:
+All options are passed to `midi.NewMIDIClient(opts...)`:
 
-- `WithLogger` to inject a custom logger.
-- `WithLogLevel` to control the minimum log level.
-- `WithLogDestination` to write logs to console or file.
-- `WithChannelBufferSize` to size the event channel returned by `StartCapture`.
-- `WithMIDIEventFilter` to allow only selected MIDI commands.
-- `WithCoreMIDIConfig` to customize the CoreMIDI client name on macOS.
+| Option | Default | Description |
+|---|---|---|
+| `WithLogger(l)` | built-in stderr logger | Inject a custom `contracts.Logger` |
+| `WithLogLevel(level)` | `InfoLevel` | Minimum log level to emit |
+| `WithLogDestination(dest, path...)` | `ConsoleLog` | `ConsoleLog` or `FileLog` (requires path) |
+| `WithChannelBufferSize(n)` | `100` | Buffer size of the event channel |
+| `WithMIDIEventFilter(f)` | nil (all commands) | Allowlist of MIDI commands to forward |
+| `WithCoreMIDIConfig(c)` | client name `"GO MIDI Client"` | macOS-only CoreMIDI client name |
 
 ```go
 client, err := midi.NewMIDIClient(
-    contracts.WithLogger(log),
-    contracts.WithLogLevel(contracts.InfoLevel),
-    contracts.WithLogDestination(contracts.ConsoleLog),
+    contracts.WithLogLevel(contracts.DebugLevel),
+    contracts.WithLogDestination(contracts.FileLog, "/var/log/midi.log"),
     contracts.WithChannelBufferSize(256),
-    contracts.WithMIDIEventFilter(contracts.MIDIEventFilter{
-        Commands: []contracts.MIDICommand{contracts.NoteOn, contracts.NoteOff},
-    }),
 )
 ```
+
+**Log levels** (in increasing severity): `DebugLevel`, `InfoLevel`, `WarnLevel`, `ErrorLevel`, `FatalLevel`.
+
+## Filtering MIDI Commands
+
+Pass a `MIDIEventFilter` to receive only the commands you care about. Without a filter, all commands are forwarded.
+
+```go
+contracts.WithMIDIEventFilter(contracts.MIDIEventFilter{
+    Commands: []contracts.MIDICommand{contracts.NoteOn, contracts.NoteOff},
+})
+```
+
+## Custom Logger
+
+Implement `contracts.Logger` to integrate with your own logging framework:
+
+```go
+type myLogger struct{}
+
+func (l *myLogger) Info(msg string, fields ...contracts.Field)  { /* ... */ }
+func (l *myLogger) Debug(msg string, fields ...contracts.Field) { /* ... */ }
+func (l *myLogger) Warn(msg string, fields ...contracts.Field)  { /* ... */ }
+func (l *myLogger) Error(msg string, fields ...contracts.Field) { /* ... */ }
+func (l *myLogger) Fatal(msg string, fields ...contracts.Field) { /* ... */ }
+func (l *myLogger) SetLevel(level contracts.LogLevel)           { /* ... */ }
+func (l *myLogger) SetDestination(dest contracts.LogDestination, path ...string) { /* ... */ }
+
+client, err := midi.NewMIDIClient(contracts.WithLogger(&myLogger{}))
+```
+
+Field constructors: `contracts.StringField`, `contracts.IntField`, `contracts.BoolField`,
+`contracts.ErrField`, `contracts.Float64Field`, `contracts.TimeField`, `contracts.Uint64Field`, `contracts.Uint8Field`, `contracts.Int64Field`.
+
+## Testing with MockMIDIClient
+
+`contracts.MockMIDIClient` is provided for use in your own tests:
+
+```go
+mock := &contracts.MockMIDIClient{
+    StartCaptureFunc: func(ctx context.Context) (<-chan contracts.MIDI, error) {
+        ch := make(chan contracts.MIDI, 1)
+        ch <- contracts.MIDI{Command: 0x90, Note: 60, Velocity: 100}
+        close(ch)
+        return ch, nil
+    },
+}
+
+events, _ := mock.StartCapture(context.Background())
+for e := range events {
+    fmt.Println(e)
+}
+fmt.Println("StartCapture called:", mock.StartCaptureCalls) // 1
+```
+
+## Platform Notes
+
+| Platform | Implementation | CGo |
+|---|---|---|
+| macOS | CoreMIDI via CGo (`-framework CoreMIDI`) | Required |
+| Windows | `winmm.dll` via pure-Go syscalls | Not required |
+| Linux / other | Stub — methods return errors | Not required |
+
+The library compiles on all platforms. On unsupported platforms the client is a no-op stub that returns errors from every method.
 
 ## Contribution
 
