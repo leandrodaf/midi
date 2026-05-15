@@ -42,6 +42,9 @@ type ClientMid struct {
 	cancelPipeW int
 }
 
+// NewMIDIClient creates a Linux ALSA raw-MIDI client. No hardware is opened
+// at construction time; call SelectDevice to choose an input device and
+// StartCapture to begin receiving events.
 func NewMIDIClient(options *contracts.ClientOptions) (contracts.ClientMIDI, error) {
 	options.Logger.Info("MIDI client created for Linux (ALSA)")
 	return &ClientMid{
@@ -53,6 +56,8 @@ func NewMIDIClient(options *contracts.ClientOptions) (contracts.ClientMIDI, erro
 	}, nil
 }
 
+// ListDevices enumerates ALSA raw-MIDI input devices and caches the result
+// so that SelectDevice can map a stable integer index to a hardware address.
 func (m *ClientMid) ListDevices() ([]contracts.DeviceInfo, error) {
 	devs, err := alsa.EnumerateInputs()
 	if err != nil {
@@ -78,6 +83,8 @@ func (m *ClientMid) ListDevices() ([]contracts.DeviceInfo, error) {
 	return result, nil
 }
 
+// SelectDevice records the hardware address of the ALSA device at index
+// deviceID. If capture is already running it is stopped first.
 func (m *ClientMid) SelectDevice(deviceID int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -111,6 +118,7 @@ func (m *ClientMid) SelectDevice(deviceID int) error {
 	return nil
 }
 
+// closeOutCh closes the output channel exactly once.
 func (m *ClientMid) closeOutCh() {
 	m.closeChOnce.Do(func() {
 		if m.outCh != nil {
@@ -143,6 +151,10 @@ func (m *ClientMid) Stop() error {
 	return nil
 }
 
+// StartCapture opens the previously selected ALSA device, creates a cancel
+// pipe pair for cooperative shutdown, and launches a goroutine that calls
+// readLoop to parse incoming MIDI bytes. The returned channel is closed when
+// ctx is cancelled or Stop is called.
 func (m *ClientMid) StartCapture(ctx context.Context) (<-chan contracts.MIDI, error) {
 	if err := m.Stop(); err != nil {
 		return nil, err
@@ -329,12 +341,16 @@ func containsDevice(list []contracts.DeviceInfo, d contracts.DeviceInfo) bool {
 	}
 	return false
 }
+// midiParser reassembles raw MIDI bytes into 3-byte channel-voice messages
+// using the running-status rule. SysEx and real-time messages are discarded.
 type midiParser struct {
 	status  byte
 	data    [2]byte
 	dataPos int
 }
 
+// feed processes one raw MIDI byte. It returns (cmd, note, vel, true) when a
+// complete 3-byte channel-voice message has been assembled, otherwise false.
 func (p *midiParser) feed(b byte) (cmd, note, vel byte, ok bool) {
 	if b >= 0x80 {
 		switch {

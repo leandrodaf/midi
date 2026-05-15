@@ -57,6 +57,10 @@ func goMidiNotify(msgID C.int, handle unsafe.Pointer) {
 	}
 }
 
+// NewClient creates a CoreMIDI client with the given display name and registers
+// a notification callback so that device-change events are forwarded to the
+// returned Client.NotifyCh channel. The cgo.Handle embedded in Client must be
+// released by calling Dispose() when the client is no longer needed.
 func NewClient(name string) (client Client, err error) {
 	notifyCh := make(chan int32, 16)
 	h := cgo.NewHandle(notifyCh)
