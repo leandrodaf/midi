@@ -4,15 +4,17 @@ import "context"
 
 // MockMIDIClient is a configurable ClientMIDI mock for tests.
 type MockMIDIClient struct {
-	StartCaptureFunc func(ctx context.Context) (<-chan MIDI, error)
-	StopFunc         func() error
-	ListDevicesFunc  func() ([]DeviceInfo, error)
-	SelectDeviceFunc func(deviceID int) error
+	StartCaptureFunc  func(ctx context.Context) (<-chan MIDI, error)
+	StopFunc          func() error
+	ListDevicesFunc   func() ([]DeviceInfo, error)
+	SelectDeviceFunc  func(deviceID int) error
+	WatchDevicesFunc  func(ctx context.Context) (<-chan DeviceEvent, error)
 
-	StartCaptureCalls int
-	StopCalls         int
-	ListDevicesCalls  int
-	SelectDeviceCalls int
+	StartCaptureCalls  int
+	StopCalls          int
+	ListDevicesCalls   int
+	SelectDeviceCalls  int
+	WatchDevicesCalls  int
 }
 
 func (m *MockMIDIClient) StartCapture(ctx context.Context) (<-chan MIDI, error) {
@@ -45,4 +47,17 @@ func (m *MockMIDIClient) SelectDevice(deviceID int) error {
 		return m.SelectDeviceFunc(deviceID)
 	}
 	return nil
+}
+
+func (m *MockMIDIClient) WatchDevices(ctx context.Context) (<-chan DeviceEvent, error) {
+	m.WatchDevicesCalls++
+	if m.WatchDevicesFunc != nil {
+		return m.WatchDevicesFunc(ctx)
+	}
+	ch := make(chan DeviceEvent)
+	go func() {
+		<-ctx.Done()
+		close(ch)
+	}()
+	return ch, nil
 }

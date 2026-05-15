@@ -36,3 +36,9 @@ func (s *stubClient) StartCapture(_ context.Context) (<-chan contracts.MIDI, err
 }
 
 func (s *stubClient) Stop() error { return nil }
+
+func (s *stubClient) WatchDevices(ctx context.Context) (<-chan contracts.DeviceEvent, error) {
+	ch := make(chan contracts.DeviceEvent)
+	go func() { <-ctx.Done(); close(ch) }()
+	return ch, nil
+}

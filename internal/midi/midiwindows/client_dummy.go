@@ -38,3 +38,9 @@ func (m *dummyMIDIClient) Stop() error {
 	m.logger.Warn("Stop called on dummy MIDI client")
 	return nil
 }
+
+func (m *dummyMIDIClient) WatchDevices(ctx context.Context) (<-chan contracts.DeviceEvent, error) {
+	ch := make(chan contracts.DeviceEvent)
+	go func() { <-ctx.Done(); close(ch) }()
+	return ch, nil
+}

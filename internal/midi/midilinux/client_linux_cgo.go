@@ -273,7 +273,62 @@ func (m *ClientMid) readLoop(raw *alsa.RawMIDI, midifd, cancelfd int) {
 	}
 }
 
-// midiParser is a byte-level MIDI stream parser that supports running status.
+// WatchDevices returns a channel that emits a DeviceEvent whenever a MIDI
+// device is connected or disconnected. On Linux, this is implemented by
+// polling ListDevices every 2 seconds and diffing against the previous list.
+func (m *ClientMid) WatchDevices(ctx context.Context) (<-chan contracts.DeviceEvent, error) {
+	evCh := make(chan contracts.DeviceEvent, 16)
+
+	prev, _ := m.ListDevices()
+
+	go func() {
+		defer close(evCh)
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				curr, _ := m.ListDevices()
+				diffDevices(prev, curr, evCh)
+				prev = curr
+			}
+		}
+	}()
+
+	return evCh, nil
+}
+
+// diffDevices compares two device lists and sends DeviceAdded / DeviceRemoved
+// events to evCh for each difference.
+func diffDevices(prev, curr []contracts.DeviceInfo, evCh chan<- contracts.DeviceEvent) {
+	for _, d := range curr {
+		if !containsDevice(prev, d) {
+			select {
+			case evCh <- contracts.DeviceEvent{Type: contracts.DeviceAdded, Device: d}:
+			default:
+			}
+		}
+	}
+	for _, d := range prev {
+		if !containsDevice(curr, d) {
+			select {
+			case evCh <- contracts.DeviceEvent{Type: contracts.DeviceRemoved, Device: d}:
+			default:
+			}
+		}
+	}
+}
+
+func containsDevice(list []contracts.DeviceInfo, d contracts.DeviceInfo) bool {
+	for _, item := range list {
+		if item.Name == d.Name && item.Manufacturer == d.Manufacturer {
+			return true
+		}
+	}
+	return false
+}
 type midiParser struct {
 	status  byte
 	data    [2]byte

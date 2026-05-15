@@ -159,6 +159,45 @@ func (m *ClientMid) stopLocked() {
 	m.logger.Info("MIDI capture stopped")
 }
 
+// WatchDevices returns a channel that emits a DeviceEvent each time a MIDI
+// device is connected or disconnected. It uses CoreMIDI's native notification
+// mechanism (kMIDIMsgObjectAdded / kMIDIMsgObjectRemoved / kMIDIMsgSetupChanged)
+// so events are delivered with minimal latency.
+func (m *ClientMid) WatchDevices(ctx context.Context) (<-chan contracts.DeviceEvent, error) {
+	evCh := make(chan contracts.DeviceEvent, 16)
+
+	notifyCh := m.client.NotifyCh
+	if notifyCh == nil {
+		close(evCh)
+		return evCh, nil
+	}
+
+	prev, _ := m.ListDevices()
+
+	go func() {
+		defer close(evCh)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msgID, ok := <-notifyCh:
+				if !ok {
+					return
+				}
+				// React to setup changes (1), object added (2), object removed (3).
+				if msgID < 1 || msgID > 3 {
+					continue
+				}
+				curr, _ := m.ListDevices()
+				diffDevices(prev, curr, evCh)
+				prev = curr
+			}
+		}
+	}()
+
+	return evCh, nil
+}
+
 func (m *ClientMid) closeOutCh() {
 	m.closeChOnce.Do(func() {
 		if m.outCh != nil {
@@ -179,6 +218,7 @@ func (m *ClientMid) Stop() error {
 
 	m.wg.Wait()
 	m.closeOutCh()
+	m.client.Dispose()
 	return nil
 }
 
@@ -208,4 +248,34 @@ func (m *ClientMid) StartCapture(ctx context.Context) (<-chan contracts.MIDI, er
 	}()
 
 	return ch, nil
+}
+
+// diffDevices compares two device lists and sends DeviceAdded / DeviceRemoved
+// events to evCh for each difference.
+func diffDevices(prev, curr []contracts.DeviceInfo, evCh chan<- contracts.DeviceEvent) {
+	for _, d := range curr {
+		if !containsDevice(prev, d) {
+			select {
+			case evCh <- contracts.DeviceEvent{Type: contracts.DeviceAdded, Device: d}:
+			default:
+			}
+		}
+	}
+	for _, d := range prev {
+		if !containsDevice(curr, d) {
+			select {
+			case evCh <- contracts.DeviceEvent{Type: contracts.DeviceRemoved, Device: d}:
+			default:
+			}
+		}
+	}
+}
+
+func containsDevice(list []contracts.DeviceInfo, d contracts.DeviceInfo) bool {
+	for _, item := range list {
+		if item.Name == d.Name && item.Manufacturer == d.Manufacturer {
+			return true
+		}
+	}
+	return false
 }
