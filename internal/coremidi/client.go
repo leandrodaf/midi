@@ -67,7 +67,7 @@ func NewClient(name string) (client Client, err error) {
 
 	stringToCFString(name, func(cfName C.CFStringRef) {
 		var clientRef C.MIDIClientRef
-		osStatus := C.newMIDIClientWithNotify(cfName, h.Pointer(), &clientRef)
+		osStatus := C.newMIDIClientWithNotify(cfName, unsafe.Pointer(uintptr(h)), &clientRef)
 		if osStatus != C.noErr {
 			err = fmt.Errorf("%d: failed to create a client", int(osStatus))
 		} else {

@@ -326,7 +326,9 @@ func containsDevice(list []contracts.DeviceInfo, d contracts.DeviceInfo) bool {
 	return false
 }
 
-
+// stopCapture stops MIDI input and closes the device handle.
+// Must be called with m.mu held.
+func (m *ClientMid) stopCapture() error {
 	if m.handle == 0 {
 		return ErrInvalidDeviceHandle
 	}
