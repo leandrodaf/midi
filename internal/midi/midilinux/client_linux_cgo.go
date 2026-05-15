@@ -42,6 +42,9 @@ type ClientMid struct {
 	cancelPipeW int
 }
 
+// NewMIDIClient creates a Linux ALSA raw-MIDI client. No hardware is opened
+// at construction time; call SelectDevice to choose an input device and
+// StartCapture to begin receiving events.
 func NewMIDIClient(options *contracts.ClientOptions) (contracts.ClientMIDI, error) {
 	options.Logger.Info("MIDI client created for Linux (ALSA)")
 	return &ClientMid{
@@ -53,6 +56,8 @@ func NewMIDIClient(options *contracts.ClientOptions) (contracts.ClientMIDI, erro
 	}, nil
 }
 
+// ListDevices enumerates ALSA raw-MIDI input devices and caches the result
+// so that SelectDevice can map a stable integer index to a hardware address.
 func (m *ClientMid) ListDevices() ([]contracts.DeviceInfo, error) {
 	devs, err := alsa.EnumerateInputs()
 	if err != nil {
@@ -78,6 +83,8 @@ func (m *ClientMid) ListDevices() ([]contracts.DeviceInfo, error) {
 	return result, nil
 }
 
+// SelectDevice records the hardware address of the ALSA device at index
+// deviceID. If capture is already running it is stopped first.
 func (m *ClientMid) SelectDevice(deviceID int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -111,6 +118,7 @@ func (m *ClientMid) SelectDevice(deviceID int) error {
 	return nil
 }
 
+// closeOutCh closes the output channel exactly once.
 func (m *ClientMid) closeOutCh() {
 	m.closeChOnce.Do(func() {
 		if m.outCh != nil {
@@ -143,6 +151,10 @@ func (m *ClientMid) Stop() error {
 	return nil
 }
 
+// StartCapture opens the previously selected ALSA device, creates a cancel
+// pipe pair for cooperative shutdown, and launches a goroutine that calls
+// readLoop to parse incoming MIDI bytes. The returned channel is closed when
+// ctx is cancelled or Stop is called.
 func (m *ClientMid) StartCapture(ctx context.Context) (<-chan contracts.MIDI, error) {
 	if err := m.Stop(); err != nil {
 		return nil, err
@@ -273,13 +285,72 @@ func (m *ClientMid) readLoop(raw *alsa.RawMIDI, midifd, cancelfd int) {
 	}
 }
 
-// midiParser is a byte-level MIDI stream parser that supports running status.
+// WatchDevices returns a channel that emits a DeviceEvent whenever a MIDI
+// device is connected or disconnected. On Linux, this is implemented by
+// polling ListDevices every 2 seconds and diffing against the previous list.
+func (m *ClientMid) WatchDevices(ctx context.Context) (<-chan contracts.DeviceEvent, error) {
+	evCh := make(chan contracts.DeviceEvent, 16)
+
+	prev, _ := m.ListDevices()
+
+	go func() {
+		defer close(evCh)
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				curr, _ := m.ListDevices()
+				diffDevices(prev, curr, evCh)
+				prev = curr
+			}
+		}
+	}()
+
+	return evCh, nil
+}
+
+// diffDevices compares two device lists and sends DeviceAdded / DeviceRemoved
+// events to evCh for each difference.
+func diffDevices(prev, curr []contracts.DeviceInfo, evCh chan<- contracts.DeviceEvent) {
+	for _, d := range curr {
+		if !containsDevice(prev, d) {
+			select {
+			case evCh <- contracts.DeviceEvent{Type: contracts.DeviceAdded, Device: d}:
+			default:
+			}
+		}
+	}
+	for _, d := range prev {
+		if !containsDevice(curr, d) {
+			select {
+			case evCh <- contracts.DeviceEvent{Type: contracts.DeviceRemoved, Device: d}:
+			default:
+			}
+		}
+	}
+}
+
+func containsDevice(list []contracts.DeviceInfo, d contracts.DeviceInfo) bool {
+	for _, item := range list {
+		if item.Name == d.Name && item.Manufacturer == d.Manufacturer {
+			return true
+		}
+	}
+	return false
+}
+// midiParser reassembles raw MIDI bytes into 3-byte channel-voice messages
+// using the running-status rule. SysEx and real-time messages are discarded.
 type midiParser struct {
 	status  byte
 	data    [2]byte
 	dataPos int
 }
 
+// feed processes one raw MIDI byte. It returns (cmd, note, vel, true) when a
+// complete 3-byte channel-voice message has been assembled, otherwise false.
 func (p *midiParser) feed(b byte) (cmd, note, vel byte, ok bool) {
 	if b >= 0x80 {
 		switch {

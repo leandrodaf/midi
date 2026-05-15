@@ -7,6 +7,7 @@ import (
 	"context"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/leandrodaf/midi/v2/internal/logger"
 	"github.com/leandrodaf/midi/v2/internal/midi/midiwindows"
@@ -62,5 +63,46 @@ func TestDummyClient_Stop_ReturnsNil(t *testing.T) {
 
 	if err := client.Stop(); err != nil {
 		t.Errorf("expected Stop to return nil, got %v", err)
+	}
+}
+
+func TestDummyWindowsClient_WatchDevices_ClosesOnCancel(t *testing.T) {
+	client := newDummyWindowsClient(t)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	ch, err := client.WatchDevices(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cancel()
+
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Errorf("expected channel to be closed after cancel")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out: channel not closed after context cancel")
+	}
+}
+
+func TestDummyWindowsClient_WatchDevices_NoEventsEmitted(t *testing.T) {
+	client := newDummyWindowsClient(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch, err := client.WatchDevices(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	select {
+	case ev, ok := <-ch:
+		if ok {
+			t.Errorf("expected no events from stub, got %+v", ev)
+		}
+	case <-time.After(20 * time.Millisecond):
+		// good — no events emitted
 	}
 }

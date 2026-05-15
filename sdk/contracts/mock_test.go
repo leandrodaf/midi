@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/leandrodaf/midi/v2/sdk/contracts"
 )
@@ -137,5 +138,80 @@ func TestMockMIDIClient_CallCountersIncrement(t *testing.T) {
 	}
 	if client.SelectDeviceCalls != 3 {
 		t.Errorf("expected SelectDeviceCalls to be 3, got %d", client.SelectDeviceCalls)
+	}
+}
+
+func TestMockMIDIClient_WatchDevices_UsesFunc(t *testing.T) {
+	expected := make(chan contracts.DeviceEvent, 1)
+	client := &contracts.MockMIDIClient{
+		WatchDevicesFunc: func(_ context.Context) (<-chan contracts.DeviceEvent, error) {
+			return expected, nil
+		},
+	}
+
+	ch, err := client.WatchDevices(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ch != expected {
+		t.Errorf("expected WatchDevicesFunc channel to be returned")
+	}
+	if client.WatchDevicesCalls != 1 {
+		t.Errorf("expected WatchDevicesCalls=1, got %d", client.WatchDevicesCalls)
+	}
+}
+
+func TestMockMIDIClient_WatchDevices_FuncError(t *testing.T) {
+	want := errors.New("watch error")
+	client := &contracts.MockMIDIClient{
+		WatchDevicesFunc: func(_ context.Context) (<-chan contracts.DeviceEvent, error) {
+			return nil, want
+		},
+	}
+
+	ch, err := client.WatchDevices(context.Background())
+	if ch != nil {
+		t.Errorf("expected nil channel on error")
+	}
+	if err != want {
+		t.Errorf("expected configured error, got %v", err)
+	}
+}
+
+func TestMockMIDIClient_WatchDevices_DefaultClosesOnCancel(t *testing.T) {
+	client := &contracts.MockMIDIClient{}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	ch, err := client.WatchDevices(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cancel()
+
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Errorf("expected channel to be closed after context cancel")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out: channel not closed after context cancel")
+	}
+	if client.WatchDevicesCalls != 1 {
+		t.Errorf("expected WatchDevicesCalls=1, got %d", client.WatchDevicesCalls)
+	}
+}
+
+func TestMockMIDIClient_WatchDevices_IncrementsCalls(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := &contracts.MockMIDIClient{}
+
+	for i := range 3 {
+		_, _ = client.WatchDevices(ctx)
+		_ = i
+	}
+	if client.WatchDevicesCalls != 3 {
+		t.Errorf("expected WatchDevicesCalls=3, got %d", client.WatchDevicesCalls)
 	}
 }

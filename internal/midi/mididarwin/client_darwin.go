@@ -27,6 +27,10 @@ type internalPortConnection interface {
 	Disconnect()
 }
 
+// ClientMid is the macOS CoreMIDI implementation of contracts.ClientMIDI.
+// It wraps a CoreMIDI client + input port and routes packets to a buffered
+// output channel. A separate notification channel (coremidi.Client.NotifyCh)
+// is used by WatchDevices to detect device hot-plug events.
 type ClientMid struct {
 	logger            contracts.Logger
 	eventChannel      atomic.Value
@@ -43,6 +47,10 @@ type ClientMid struct {
 	closeChOnce       sync.Once
 }
 
+// NewMIDIClient creates a CoreMIDI client and returns a ClientMIDI backed by
+// the CoreMIDI framework. options.CoreMIDIConfig.ClientName is used as the
+// CoreMIDI client name displayed in Audio MIDI Setup; it defaults to
+// "GO MIDI Client" when nil.
 func NewMIDIClient(options *contracts.ClientOptions) (contracts.ClientMIDI, error) {
 	if options.CoreMIDIConfig == nil {
 		options.CoreMIDIConfig = &contracts.CoreMIDIConfig{ClientName: "GO MIDI Client"}
@@ -61,6 +69,7 @@ func NewMIDIClient(options *contracts.ClientOptions) (contracts.ClientMIDI, erro
 	}, nil
 }
 
+// ListDevices returns all CoreMIDI sources currently visible to the system.
 func (m *ClientMid) ListDevices() ([]contracts.DeviceInfo, error) {
 	sources, err := coremidi.AllSources()
 	if err != nil {
@@ -82,6 +91,8 @@ func (m *ClientMid) ListDevices() ([]contracts.DeviceInfo, error) {
 	return devices, nil
 }
 
+// SelectDevice opens an input port connected to the CoreMIDI source at index
+// deviceID. Any previous port connection is disconnected first.
 func (m *ClientMid) SelectDevice(deviceID int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -117,6 +128,9 @@ func (m *ClientMid) SelectDevice(deviceID int) error {
 	return nil
 }
 
+// handleMIDIMessage is the CoreMIDI input-port callback. It converts a raw
+// MIDI packet into a contracts.MIDI event, applies the event filter, and sends
+// the event to the output channel. Packets with fewer than 3 bytes are dropped.
 func (m *ClientMid) handleMIDIMessage(source coremidi.Source, packet coremidi.Packet) {
 	m.wg.Add(1)
 	defer m.wg.Done()
@@ -159,6 +173,46 @@ func (m *ClientMid) stopLocked() {
 	m.logger.Info("MIDI capture stopped")
 }
 
+// WatchDevices returns a channel that emits a DeviceEvent each time a MIDI
+// device is connected or disconnected. It uses CoreMIDI's native notification
+// mechanism (kMIDIMsgObjectAdded / kMIDIMsgObjectRemoved / kMIDIMsgSetupChanged)
+// so events are delivered with minimal latency.
+func (m *ClientMid) WatchDevices(ctx context.Context) (<-chan contracts.DeviceEvent, error) {
+	evCh := make(chan contracts.DeviceEvent, 16)
+
+	notifyCh := m.client.NotifyCh
+	if notifyCh == nil {
+		close(evCh)
+		return evCh, nil
+	}
+
+	prev, _ := m.ListDevices()
+
+	go func() {
+		defer close(evCh)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msgID, ok := <-notifyCh:
+				if !ok {
+					return
+				}
+				// React to setup changes (1), object added (2), object removed (3).
+				if msgID < 1 || msgID > 3 {
+					continue
+				}
+				curr, _ := m.ListDevices()
+				diffDevices(prev, curr, evCh)
+				prev = curr
+			}
+		}
+	}()
+
+	return evCh, nil
+}
+
+// closeOutCh closes the output channel exactly once.
 func (m *ClientMid) closeOutCh() {
 	m.closeChOnce.Do(func() {
 		if m.outCh != nil {
@@ -167,6 +221,8 @@ func (m *ClientMid) closeOutCh() {
 	})
 }
 
+// Stop halts MIDI capture, disconnects the port connection, drains in-flight
+// callbacks via wg.Wait, and calls Dispose to release the CoreMIDI cgo.Handle.
 func (m *ClientMid) Stop() error {
 	m.mu.Lock()
 	if !m.capturing {
@@ -179,9 +235,14 @@ func (m *ClientMid) Stop() error {
 
 	m.wg.Wait()
 	m.closeOutCh()
+	m.client.Dispose()
 	return nil
 }
 
+// StartCapture begins streaming MIDI events from the selected device into the
+// returned channel. The channel is closed when ctx is cancelled or Stop is
+// called. Calling StartCapture while already capturing implicitly calls Stop
+// first to reset state.
 func (m *ClientMid) StartCapture(ctx context.Context) (<-chan contracts.MIDI, error) {
 	if err := m.Stop(); err != nil {
 		return nil, err
@@ -208,4 +269,34 @@ func (m *ClientMid) StartCapture(ctx context.Context) (<-chan contracts.MIDI, er
 	}()
 
 	return ch, nil
+}
+
+// diffDevices compares two device lists and sends DeviceAdded / DeviceRemoved
+// events to evCh for each difference.
+func diffDevices(prev, curr []contracts.DeviceInfo, evCh chan<- contracts.DeviceEvent) {
+	for _, d := range curr {
+		if !containsDevice(prev, d) {
+			select {
+			case evCh <- contracts.DeviceEvent{Type: contracts.DeviceAdded, Device: d}:
+			default:
+			}
+		}
+	}
+	for _, d := range prev {
+		if !containsDevice(curr, d) {
+			select {
+			case evCh <- contracts.DeviceEvent{Type: contracts.DeviceRemoved, Device: d}:
+			default:
+			}
+		}
+	}
+}
+
+func containsDevice(list []contracts.DeviceInfo, d contracts.DeviceInfo) bool {
+	for _, item := range list {
+		if item.Name == d.Name && item.Manufacturer == d.Manufacturer {
+			return true
+		}
+	}
+	return false
 }

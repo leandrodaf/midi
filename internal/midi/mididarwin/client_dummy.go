@@ -10,6 +10,8 @@ import (
 	"github.com/leandrodaf/midi/v2/sdk/contracts"
 )
 
+// dummyMIDIClient is the no-op ClientMIDI used on non-macOS systems when the
+// mididarwin package is selected by the build system.
 type dummyMIDIClient struct {
 	logger contracts.Logger
 }
@@ -37,4 +39,12 @@ func (m *dummyMIDIClient) StartCapture(ctx context.Context) (<-chan contracts.MI
 func (m *dummyMIDIClient) Stop() error {
 	m.logger.Warn("Stop called on dummy MIDI client")
 	return nil
+}
+
+// WatchDevices returns a channel that is closed when ctx is cancelled.
+// No device events are ever emitted — this is a no-op stub.
+func (m *dummyMIDIClient) WatchDevices(ctx context.Context) (<-chan contracts.DeviceEvent, error) {
+	ch := make(chan contracts.DeviceEvent)
+	go func() { <-ctx.Done(); close(ch) }()
+	return ch, nil
 }

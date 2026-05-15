@@ -25,6 +25,7 @@ var (
 	ErrCloseDeviceFailed   = errors.New("failed to close MIDI device")
 )
 
+// HMIDIIN is a Windows MIDI input device handle (wraps windows.Handle).
 type HMIDIIN windows.Handle
 
 const (
@@ -41,6 +42,7 @@ const (
 	MIM_MOREDATA  = 0x3CC
 )
 
+// midiInCaps mirrors the Windows MIDIINCAPSW structure used by midiInGetDevCapsW.
 type midiInCaps struct {
 	wMid           uint16
 	wPid           uint16
@@ -49,6 +51,10 @@ type midiInCaps struct {
 	dwSupport      uint32
 }
 
+// ClientMid is the Windows winmm implementation of contracts.ClientMIDI.
+// It uses midiInOpen/midiInStart/midiInStop/midiInClose from winmm.dll and
+// receives MIDI events via a windows.NewCallback function registered at
+// SelectDevice time.
 type ClientMid struct {
 	logger            contracts.Logger
 	eventChannel      atomic.Value
@@ -73,6 +79,8 @@ var (
 	procMidiInClose      = winmm.NewProc("midiInClose")
 )
 
+// NewMIDIClient creates a Windows winmm MIDI client. No hardware handle is
+// opened at construction time; call SelectDevice to open a device.
 func NewMIDIClient(options *contracts.ClientOptions) (contracts.ClientMIDI, error) {
 	options.Logger.Info("MIDI client created for Windows")
 	return &ClientMid{
@@ -83,6 +91,7 @@ func NewMIDIClient(options *contracts.ClientOptions) (contracts.ClientMIDI, erro
 	}, nil
 }
 
+// ListDevices enumerates MIDI input devices via midiInGetNumDevs / midiInGetDevCapsW.
 func (m *ClientMid) ListDevices() ([]contracts.DeviceInfo, error) {
 	r0, _, _ := procMidiInGetNumDevs.Call()
 	if uint32(r0) == 0 {
@@ -108,6 +117,9 @@ func (m *ClientMid) ListDevices() ([]contracts.DeviceInfo, error) {
 	return devices, nil
 }
 
+// SelectDevice opens the winmm MIDI input device at index deviceID and
+// registers midiInCallback as the low-level callback. Any previous device
+// handle is closed first.
 func (m *ClientMid) SelectDevice(deviceID int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -134,6 +146,7 @@ func (m *ClientMid) SelectDevice(deviceID int) error {
 	return nil
 }
 
+// closeOutCh closes the output channel exactly once.
 func (m *ClientMid) closeOutCh() {
 	m.closeChOnce.Do(func() {
 		if m.outCh != nil {
@@ -142,6 +155,9 @@ func (m *ClientMid) closeOutCh() {
 	})
 }
 
+// StartCapture calls midiInStart on the open device handle and returns a
+// buffered channel that receives MIDI events via midiInCallback. The channel
+// is closed when ctx is cancelled or Stop is called.
 func (m *ClientMid) StartCapture(ctx context.Context) (<-chan contracts.MIDI, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -178,6 +194,10 @@ func (m *ClientMid) StartCapture(ctx context.Context) (<-chan contracts.MIDI, er
 	return ch, nil
 }
 
+// midiInCallback is the low-level winmm callback registered by SelectDevice.
+// It runs on a dedicated OS thread created by the winmm driver; it must not
+// call any blocking winmm functions. MIM_DATA events are decoded and forwarded
+// to the output channel.
 func midiInCallback(hMidiIn uintptr, wMsg uint32, dwInstance uintptr, dwParam1 uintptr, dwParam2 uintptr) uintptr {
 	m := (*ClientMid)(unsafe.Pointer(dwInstance))
 
@@ -232,6 +252,8 @@ func midiInCallback(hMidiIn uintptr, wMsg uint32, dwInstance uintptr, dwParam1 u
 	return 0
 }
 
+// Stop calls midiInStop and midiInClose, closes the output channel, and resets
+// the device handle. Safe to call concurrently and when no device is selected.
 func (m *ClientMid) Stop() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -247,6 +269,65 @@ func (m *ClientMid) Stop() error {
 	return nil
 }
 
+// WatchDevices returns a channel that emits a DeviceEvent whenever a MIDI
+// device is connected or disconnected. On Windows, this is implemented by
+// polling midiInGetNumDevs every 2 seconds and diffing against the previous list.
+func (m *ClientMid) WatchDevices(ctx context.Context) (<-chan contracts.DeviceEvent, error) {
+	evCh := make(chan contracts.DeviceEvent, 16)
+
+	prev, _ := m.ListDevices()
+
+	go func() {
+		defer close(evCh)
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				curr, _ := m.ListDevices()
+				diffDevices(prev, curr, evCh)
+				prev = curr
+			}
+		}
+	}()
+
+	return evCh, nil
+}
+
+// diffDevices compares two device lists and sends DeviceAdded / DeviceRemoved
+// events to evCh for each difference.
+func diffDevices(prev, curr []contracts.DeviceInfo, evCh chan<- contracts.DeviceEvent) {
+	for _, d := range curr {
+		if !containsDevice(prev, d) {
+			select {
+			case evCh <- contracts.DeviceEvent{Type: contracts.DeviceAdded, Device: d}:
+			default:
+			}
+		}
+	}
+	for _, d := range prev {
+		if !containsDevice(curr, d) {
+			select {
+			case evCh <- contracts.DeviceEvent{Type: contracts.DeviceRemoved, Device: d}:
+			default:
+			}
+		}
+	}
+}
+
+func containsDevice(list []contracts.DeviceInfo, d contracts.DeviceInfo) bool {
+	for _, item := range list {
+		if item.Name == d.Name && item.Manufacturer == d.Manufacturer {
+			return true
+		}
+	}
+	return false
+}
+
+// stopCapture stops MIDI input and closes the device handle.
+// Must be called with m.mu held.
 func (m *ClientMid) stopCapture() error {
 	if m.handle == 0 {
 		return ErrInvalidDeviceHandle
