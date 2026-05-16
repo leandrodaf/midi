@@ -221,8 +221,11 @@ func (m *ClientMid) closeOutCh() {
 	})
 }
 
-// Stop halts MIDI capture, disconnects the port connection, drains in-flight
-// callbacks via wg.Wait, and calls Dispose to release the CoreMIDI cgo.Handle.
+// Stop halts MIDI capture and disconnects the port connection.
+// It intentionally does NOT call client.Dispose() so that the CoreMIDI
+// notification run loop keeps running after capture stops — WatchDevices must
+// continue to receive hot-plug events even between capture sessions.
+// Dispose is called only on full client teardown (application shutdown).
 func (m *ClientMid) Stop() error {
 	m.mu.Lock()
 	if !m.capturing {
@@ -235,6 +238,14 @@ func (m *ClientMid) Stop() error {
 
 	m.wg.Wait()
 	m.closeOutCh()
+	return nil
+}
+
+// Close tears down the CoreMIDI client completely, stopping the notification
+// run loop and releasing all resources. Call this only when the client will
+// never be used again (e.g. application shutdown).
+func (m *ClientMid) Close() error {
+	_ = m.Stop()
 	m.client.Dispose()
 	return nil
 }
